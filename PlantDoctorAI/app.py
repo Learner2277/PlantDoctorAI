@@ -21,7 +21,7 @@ client = genai.Client(api_key=api_key) if api_key else None
 
 # Primary and backup models
 PRIMARY_MODEL = "gemini-3.8-flash"
-BACKUP_MODEL = "gemini-2.5-flash"
+BACKUP_MODEL = "gemini-3.5-flash-lite"
 
 
 @app.route("/")
