@@ -349,16 +349,28 @@ analyzeButton.addEventListener("click", async function () {
     try {
 
         // Send image to Flask backend
-        const response = await fetch("/analyze", {
+      const response = await fetch("/analyze", {
+    method: "POST",
+    body: formData
+});
 
-            method: "POST",
+const contentType = response.headers.get("content-type");
 
-            body: formData
+if (!contentType || !contentType.includes("application/json")) {
+    const errorText = await response.text();
 
-        });
+    console.error("Server returned HTML instead of JSON:", errorText);
 
+    throw new Error(
+        `Server error (${response.status}). The server returned an HTML error page instead of JSON.`
+    );
+}
 
-        const data = await response.json();
+const data = await response.json();
+
+if (!response.ok) {
+    throw new Error(data.error || "Something went wrong.");
+}
 
 
         // Check whether the request was successful
