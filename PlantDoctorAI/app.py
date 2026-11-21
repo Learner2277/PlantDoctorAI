@@ -1,10 +1,12 @@
 import os
+import time
+
 from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-# Load API key from .env file
+# Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
@@ -17,8 +19,9 @@ api_key = os.getenv("GEMINI_API_KEY")
 
 client = genai.Client(api_key=api_key) if api_key else None
 
-# AI model
-MODEL_NAME = "gemini-3.8-flash"
+# Primary and backup models
+PRIMARY_MODEL = "gemini-3.8-flash"
+BACKUP_MODEL = "gemini-2.5-flash"
 
 
 @app.route("/")
@@ -29,7 +32,7 @@ def home():
 @app.route("/analyze", methods=["POST"])
 def analyze_plant():
 
-    # Check whether image exists
+    # Check image exists
     if "image" not in request.files:
         return jsonify({
             "success": False,
@@ -61,16 +64,14 @@ def analyze_plant():
     if client is None:
         return jsonify({
             "success": False,
-            "error": "Gemini API key is missing. Check your .env file."
+            "error": "Gemini API key is missing. Please check your API configuration."
         }), 500
 
-    try:
+    # Read image
+    image_bytes = image.read()
 
-        # Read uploaded image
-        image_bytes = image.read()
-
-        # Instructions for AI
-        prompt = """
+    # AI instructions
+    prompt = """
 You are Plant Doctor AI, an intelligent plant health assistant.
 
 Analyze the uploaded photograph of the plant.
@@ -129,35 +130,104 @@ Make it clear that this is a preliminary AI assessment,
 not a confirmed scientific diagnosis.
 """
 
-        # Send image and prompt to Gemini
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=[
-                prompt,
-                types.Part.from_bytes(
-                    data=image_bytes,
-                    mime_type=image.mimetype
+    # Prepare image
+    image_part = types.Part.from_bytes(
+        data=image_bytes,
+        mime_type=image.mimetype
+    )
+
+    # Models to try
+    models_to_try = [
+        PRIMARY_MODEL,
+        BACKUP_MODEL
+    ]
+
+    # Retry settings
+    max_attempts = 2
+
+    for model_name in models_to_try:
+
+        for attempt in range(max_attempts):
+
+            try:
+
+                print(
+                    f"Trying model: {model_name}, "
+                    f"attempt: {attempt + 1}"
                 )
-            ]
+
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[
+                        prompt,
+                        image_part
+                    ]
+                )
+
+                diagnosis = response.text
+
+                if not diagnosis:
+                    raise Exception("The AI returned an empty response.")
+
+                print(f"Success using model: {model_name}")
+
+                return jsonify({
+                    "success": True,
+                    "diagnosis": diagnosis,
+                    "model": model_name
+                })
+
+            except Exception as error:
+
+                error_message = str(error)
+
+                print(f"Error with {model_name}: {error_message}")
+
+                # Errors that may be temporary
+                temporary_errors = [
+                    "503",
+                    "UNAVAILABLE",
+                    "high demand",
+                    "overloaded",
+                    "429",
+                    "RESOURCE_EXHAUSTED",
+                    "500",
+                    "INTERNAL",
+                    "502",
+                    "504",
+                    "deadline",
+                    "timeout"
+                ]
+
+                is_temporary = any(
+                    message.lower() in error_message.lower()
+                    for message in temporary_errors
+                )
+
+                # Retry temporary errors
+                if is_temporary and attempt < max_attempts - 1:
+
+                    wait_time = 2 ** (attempt + 1)
+
+                    print(
+                        f"Retrying in {wait_time} seconds..."
+                    )
+
+                    time.sleep(wait_time)
+
+                    continue
+
+                # Stop retrying this model and try backup
+                break
+
+    # Both models failed
+    return jsonify({
+        "success": False,
+        "error": (
+            "Our Plant Doctor AI is temporarily busy. "
+            "Please try again in a few minutes."
         )
-
-        # Extract AI report
-        diagnosis = response.text
-
-        # Return report to website
-        return jsonify({
-            "success": True,
-            "diagnosis": diagnosis
-        })
-
-    except Exception as error:
-
-        print("Gemini error:", error)
-
-        return jsonify({
-            "success": False,
-            "error": str(error)
-        }), 500
+    }), 503
 
 
 # Handle large image uploads
